@@ -14,7 +14,7 @@
 
 class  Controller: public EventListener {
   public:
-    Controller();
+    Controller(std::string);
     ~Controller();
     void update();
     void serve();
@@ -24,16 +24,17 @@ class  Controller: public EventListener {
     virtual int getAxis() const{return axis;};
     virtual int getQuit() const{return quit;};
   private:
+    std::string sock_addr;
     std::thread t;
     int fd = -1;
+    int angle = 0;
     int axis = 4;
     int quit = 0;
     int buflen_;
     char* buf_;
 
 };
-
-Controller::Controller() {
+Controller::Controller(std::string str="/tmp/stingray.sock"):sock_addr(str) {
   struct sockaddr_un addr;
   //Create buffer
   buflen_ = 1024;
@@ -41,7 +42,7 @@ Controller::Controller() {
   int err;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, "/tmp/stingray.sock", sizeof(addr.sun_path)-1);
+  strncpy(addr.sun_path, sock_addr.c_str(), sizeof(addr.sun_path)-1);
   fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0){
     std::cout<<"Failed to open Socket : "<<strerror(-fd)<<std::endl;
@@ -76,6 +77,7 @@ void Controller::serve(){
       handle(client);
   }
 }
+
 void Controller::handle(int client){
   // loop to handle all requests
   while (1) {
@@ -91,9 +93,19 @@ void Controller::handle(int client){
 void Controller::parse_request(std::string str){
   if (str == "QUIT"){
     quit = 1;
-  }else{
-    axis = std::stoi(str);
+    return;
   }
+  try{
+    if (str[0] == 'd'){
+      axis = 0;
+      angle += std::stoi(str.substr(1));
+    }else{
+      axis = std::stoi(str);
+    }
+  }catch (const std::invalid_argument& ia) {
+	  std::cerr << "Invalid argument: " << ia.what() << '\n';
+  }
+
 }
 std::string Controller::get_request(int client) {
     std::string request = "";
@@ -120,7 +132,12 @@ std::string Controller::get_request(int client) {
 }
 
 void Controller::update(){
+  if (angle == 0){
+    //We work in angle mode only when axis = 0.
+    return;
+  }
 
+  axis = (angle<0)?++angle:--angle;
 }
 
 
