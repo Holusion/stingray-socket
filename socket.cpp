@@ -1,17 +1,16 @@
 #include "EventListener.hpp"
 #include <iostream>
-#include <thread>
 #include <cstring>
+#include <cmath>
 #include  <errno.h>
 #include  <unistd.h>
 #include  <fcntl.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <sys/select.h>
 #include <csignal>
-#include <string>
 #include <vector>
+#include <algorithm> // remove and remove_if
 
 class  Controller: public EventListener {
   public:
@@ -27,7 +26,6 @@ class  Controller: public EventListener {
     virtual int getQuit() const{return quit;};
   private:
     std::string sock_addr;
-    std::thread t;
     static std::vector<int>clients;
     static int fd;
     static int angle;
@@ -85,6 +83,9 @@ Controller::~Controller() {
     fd = -1;
     unlink("/tmp/stingray.sock");
   }
+  for(auto client: clients){
+    close(client);
+  }
   //t.join();
 }
 
@@ -121,7 +122,6 @@ void Controller::serve(int signum){
   int client, flags;
   struct sockaddr_un client_addr;
   socklen_t clientlen = sizeof(client_addr);
-  std::cout<<"got signal"<<std::endl;
   if ((client = accept(fd,(struct sockaddr *)&client_addr,&clientlen)) < 0) {
     if (errno != EWOULDBLOCK && errno != EAGAIN){
       std::cout<<"Accept error : "<<strerror(errno)<<std::endl;
@@ -132,43 +132,50 @@ void Controller::serve(int signum){
       clients.push_back(client); //Append to clients
     }
   }
-  //Then we handle accepted clients
-  for (auto client = clients.begin(); client != clients.end();client++){
-    if (!handle(*client)){
-      clients.erase(client);
-    }
-  }
+  //Then we handle accepted clients.
+  //If handle() returns true, client is closed and should be deleted
+  clients.erase(
+    std::remove_if(clients.begin(), clients.end(), handle),
+     clients.end()
+  );
 }
-//return false if socket is closed
+//return true if socket is closed
 bool Controller::handle(int client){
   int rc;
   char buf [1024];
   rc= read(client, buf, 1024);
   if(rc == 0){
     close(client);
-    return false;
+    return true;
   }else if (rc == -1){
     if (errno == EWOULDBLOCK || errno == EAGAIN){
-      return true;
+      return false;
     }else{
-      std::cout<<"read error : "<<strerror(errno)<<std::endl;
+      std::cout<<"read error on "<<client<<" : "<<strerror(errno)<<std::endl;
+      return true;
     }
   }else{
     parse_request(std::string(buf));
   }
-  return true;
+  return false;
 }
 
 void Controller::parse_request(std::string str){
+  int na;
   if (str == "QUIT"){
     quit = 1;
     return;
   }
-  std::cout<<"msg:"<<str<<std::endl;
+  //std::cout<<"msg:"<<str<<std::endl;
   try{
     if (str[0] == 'd'){
       axis = 0;
-      angle += std::stoi(str.substr(1));
+      na = std::stoi(str.substr(1));
+      if (std::signbit(na) == std::signbit(angle)){
+        angle += na;
+      }else{
+        angle = na;
+      }
     }else{
       axis = std::stoi(str);
     }
@@ -183,10 +190,12 @@ void Controller::update(){
     //We work in angle mode only when axis = 0.
     return;
   }
+  //std::cout<<"angle:"<<angle<<std::endl;
   if( 4 < abs(angle)){
-    axis = (angle<0)?angle++:angle--;
+    axis = sqrt(abs(angle)*4)*abs(angle)/angle;
+    (angle<0)?angle++:angle--;
   }else{
-    axis = angle;
+    axis = 4*angle/abs(angle);
   }
 
 }
