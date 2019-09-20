@@ -7,6 +7,7 @@
 #include  <fcntl.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <netinet/in.h> 
 #include <sys/un.h>
 #include <csignal>
 #include <vector>
@@ -14,7 +15,7 @@
 
 class  Controller: public EventListener {
   public:
-    Controller(std::string);
+    Controller(int);
     ~Controller();
     void update();
     static void serve(int signum);
@@ -41,16 +42,16 @@ int Controller::angle = 0;
 int Controller::axis = 4;
 int Controller::quit = 0;
 std::vector<int>Controller::clients = std::vector<int>();
-Controller::Controller(std::string str="/tmp/stingray.sock"):sock_addr(str) {
-  struct sockaddr_un addr;
-  //Create buffer
 
+Controller::Controller(int port=3004){
+  struct sockaddr_in addr;
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(port);
+  addr.sin_addr.s_addr = INADDR_ANY;
+  bzero(&(addr.sin_zero), 8);
   int err, flags, one=1;
-  memset(&addr, 0, sizeof(addr));
-  addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, sock_addr.c_str(), sizeof(addr.sun_path)-1);
   if (fd ==-1){
-    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    fd = socket(AF_INET, SOCK_STREAM, 0);
 
     if (fd < 0){
       std::cout<<"Failed to open Socket : "<<strerror(-fd)<<std::endl;
@@ -60,19 +61,19 @@ Controller::Controller(std::string str="/tmp/stingray.sock"):sock_addr(str) {
 
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 
-    err = bind(fd, (struct sockaddr*)&addr, sizeof(addr));
+    err = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
     if (err < 0){
-      std::cout<<"Error binding /tmp/stingray.sock :"<<strerror(-err)<<std::endl;
+      std::cout<<"Error binding "<<port<<": "<<strerror(-err)<<std::endl;
     }
     //set socket flags
     configure(fd);
 
     err =listen(fd,5);
     if (err == -1){
-      std::cout<<"Error listening to /tmp/stingray.sock :"<<strerror(errno)<<std::endl;
+      std::cout<<"Error listening to  "<<port<<": "<<strerror(errno)<<std::endl;
     }
   }
-
+  std::cout<<"Listening on port "<<port<<std::endl;
 }
 
 Controller::~Controller() {
@@ -81,7 +82,6 @@ Controller::~Controller() {
   if(0 < fd){
     close(fd);
     fd = -1;
-    unlink("/tmp/stingray.sock");
   }
   for(auto client: clients){
     close(client);
@@ -120,13 +120,14 @@ bool Controller::configure(int f){
 void Controller::serve(int signum){
   // setup client
   int client, flags;
-  struct sockaddr_un client_addr;
+  struct sockaddr client_addr;
   socklen_t clientlen = sizeof(client_addr);
-  if ((client = accept(fd,(struct sockaddr *)&client_addr,&clientlen)) < 0) {
+  if ((client = accept(fd, &client_addr,&clientlen)) < 0) {
     if (errno != EWOULDBLOCK && errno != EAGAIN){
       std::cout<<"Accept error : "<<strerror(errno)<<std::endl;
     }
   }else{
+    std::cout << "Got a client!!"<<std::endl;
     //Configure the new client
     if(configure(client)){
       clients.push_back(client); //Append to clients
@@ -139,6 +140,7 @@ void Controller::serve(int signum){
      clients.end()
   );
 }
+
 //return true if socket is closed
 bool Controller::handle(int client){
   int rc;
@@ -162,11 +164,11 @@ bool Controller::handle(int client){
 
 void Controller::parse_request(std::string str){
   int na;
+  str = str.substr(0, str.find("\n"));
   if (str == "QUIT"){
     quit = 1;
     return;
   }
-  //std::cout<<"msg:"<<str<<std::endl;
   try{
     if (str[0] == 'd'){
       axis = 0;
@@ -180,7 +182,7 @@ void Controller::parse_request(std::string str){
       axis = std::stoi(str);
     }
   }catch (const std::invalid_argument& ia) {
-	  std::cerr << "Invalid argument: " << ia.what() << '\n';
+	  std::cerr << "Invalid argument: " << ia.what()<<": "<<str << '\n';
   }
 
 }
@@ -190,13 +192,12 @@ void Controller::update(){
     //We work in angle mode only when axis = 0.
     return;
   }
-  //std::cout<<"angle:"<<angle<<std::endl;
   if( 4 < abs(angle)){
     axis = sqrt(abs(angle)*4)*abs(angle)/angle;
-    (angle<0)?angle++:angle--;
   }else{
     axis = 4*angle/abs(angle);
   }
+  (angle<0)?angle++:angle--;
 
 }
 
