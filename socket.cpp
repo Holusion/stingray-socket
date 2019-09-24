@@ -9,12 +9,13 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <netinet/in.h> 
-#include <sys/un.h>
 #include <csignal>
 #include <vector>
 #include <algorithm> // remove and remove_if
 #include <regex>
+
 #include <mutex>
+#include <atomic>
 
 class  Controller: public EventListener {
   public:
@@ -31,21 +32,22 @@ class  Controller: public EventListener {
   private:
     std::string sock_addr;
     static std::vector<int>clients;
-    static int fd;
-    static int angle;
-    static int axis;
-    static int quit;
-    static std::regex re;
+    static std::atomic<int> fd;
+    static std::atomic<int> angle;
+    static std::atomic<int> axis;
+    static std::atomic<int> quit;
     static std::mutex m;
+    static std::regex re;
     static const size_t buflen_ = 1024;
     static char buf_[buflen_];
     static Controller *instance;
 };
 
-int Controller::fd = -1;
-int Controller::angle = 0;
-int Controller::axis = 4;
-int Controller::quit = 0;
+
+std::atomic<int> Controller::fd(-1);
+std::atomic<int> Controller::angle(0);
+std::atomic<int> Controller::axis(4);
+std::atomic<int> Controller::quit(0);
 
 std::mutex Controller::m;
 std::regex Controller::re = std::regex("GET /(d[-0-9.]*|QUIT)",std::regex::ECMAScript);
@@ -84,7 +86,6 @@ Controller::Controller(int port=3004){
 }
 
 Controller::~Controller() {
-  std::lock_guard<std::mutex> lock(m);
   quit = 1;
   for(auto client: clients){
     close(client);
@@ -154,14 +155,13 @@ void Controller::serve(int signum){
 bool Controller::handle(int client){
   ssize_t rc;
   char buf [1024];
-  DEBUG_LOG("Reading from "<< client<<std::endl);
   rc = read(client, buf, 1024);
   if(rc == 0){
     rc = close(client);
     if(rc != 0){
       std::cout << "Error closing client : "<<strerror(errno)<<std::endl;
     }else{
-      DEBUG_LOG("Closed client"<<client<<std::endl);
+      DEBUG_LOG("Closed client "<<client<<std::endl);
     }
     return true;
   }else if (rc == -1){
@@ -190,7 +190,7 @@ void Controller::parse_request(std::string str){
     if (str[0] == 'd'){
       axis = 0;
       na = std::stoi(str.substr(1));
-      if (std::signbit(na) == std::signbit(angle)){
+      if (std::signbit(na) == std::signbit((int)angle)){
         angle += na;
       }else{
         angle = na;
@@ -208,7 +208,7 @@ void Controller::parse_request(std::string str){
 }
 
 void Controller::update(){
-  std::lock_guard<std::mutex> lock(m);
+  //No need for mutex because all values are atomic
   if (angle == 0){
     //We work in angle mode only when axis = 0.
     return;
