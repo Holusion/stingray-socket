@@ -1,4 +1,5 @@
 #include "EventListener.hpp"
+#include "debug.h"
 #include <iostream>
 #include <cstring>
 #include <cmath>
@@ -12,6 +13,8 @@
 #include <csignal>
 #include <vector>
 #include <algorithm> // remove and remove_if
+#include <regex>
+#include <mutex>
 
 class  Controller: public EventListener {
   public:
@@ -32,6 +35,8 @@ class  Controller: public EventListener {
     static int angle;
     static int axis;
     static int quit;
+    static std::regex re;
+    static std::mutex m;
     static const size_t buflen_ = 1024;
     static char buf_[buflen_];
     static Controller *instance;
@@ -41,6 +46,9 @@ int Controller::fd = -1;
 int Controller::angle = 0;
 int Controller::axis = 4;
 int Controller::quit = 0;
+
+std::mutex Controller::m;
+std::regex Controller::re = std::regex("GET /(d[-0-9.]*|QUIT)",std::regex::ECMAScript);
 std::vector<int>Controller::clients = std::vector<int>();
 
 Controller::Controller(int port=3004){
@@ -52,7 +60,6 @@ Controller::Controller(int port=3004){
   int err, flags, one=1;
   if (fd ==-1){
     fd = socket(AF_INET, SOCK_STREAM, 0);
-
     if (fd < 0){
       std::cout<<"Failed to open Socket : "<<strerror(-fd)<<std::endl;
       return;
@@ -77,14 +84,14 @@ Controller::Controller(int port=3004){
 }
 
 Controller::~Controller() {
-  std::cout<<"Destroy"<<std::endl;
+  std::lock_guard<std::mutex> lock(m);
   quit = 1;
+  for(auto client: clients){
+    close(client);
+  }
   if(0 < fd){
     close(fd);
     fd = -1;
-  }
-  for(auto client: clients){
-    close(client);
   }
   //t.join();
 }
@@ -102,6 +109,7 @@ bool Controller::configure(int f){
   }
   struct sigaction handler;
   handler.sa_handler = Controller::serve;
+  handler.sa_flags = 0;
   if (sigfillset(&handler.sa_mask)< 0){
     std::cout<<"failed to set fillset"<<std::endl;
     return false;
@@ -118,6 +126,7 @@ bool Controller::configure(int f){
 }
 
 void Controller::serve(int signum){
+  std::lock_guard<std::mutex> lock(m);
   // setup client
   int client, flags;
   struct sockaddr client_addr;
@@ -127,7 +136,7 @@ void Controller::serve(int signum){
       std::cout<<"Accept error : "<<strerror(errno)<<std::endl;
     }
   }else{
-    std::cout << "Got a client!!"<<std::endl;
+    DEBUG_LOG("Got a client!!"<<std::endl);
     //Configure the new client
     if(configure(client)){
       clients.push_back(client); //Append to clients
@@ -136,18 +145,24 @@ void Controller::serve(int signum){
   //Then we handle accepted clients.
   //If handle() returns true, client is closed and should be deleted
   clients.erase(
-    std::remove_if(clients.begin(), clients.end(), handle),
-     clients.end()
+    std::remove_if(std::begin(clients), std::end(clients), handle),
+    std::end(clients)
   );
 }
 
 //return true if socket is closed
 bool Controller::handle(int client){
-  int rc;
+  ssize_t rc;
   char buf [1024];
-  rc= read(client, buf, 1024);
+  DEBUG_LOG("Reading from "<< client<<std::endl);
+  rc = read(client, buf, 1024);
   if(rc == 0){
-    close(client);
+    rc = close(client);
+    if(rc != 0){
+      std::cout << "Error closing client : "<<strerror(errno)<<std::endl;
+    }else{
+      DEBUG_LOG("Closed client"<<client<<std::endl);
+    }
     return true;
   }else if (rc == -1){
     if (errno == EWOULDBLOCK || errno == EAGAIN){
@@ -164,12 +179,14 @@ bool Controller::handle(int client){
 
 void Controller::parse_request(std::string str){
   int na;
-  str = str.substr(0, str.find("\n"));
-  if (str == "QUIT"){
-    quit = 1;
-    return;
-  }
+  std::smatch m;
+
   try{
+    str = str.substr(0, str.find("\n"));
+    if (str == "QUIT"){
+      quit = 1;
+      return;
+    }
     if (str[0] == 'd'){
       axis = 0;
       na = std::stoi(str.substr(1));
@@ -178,16 +195,20 @@ void Controller::parse_request(std::string str){
       }else{
         angle = na;
       }
+    }else if(str[0] == 'm'){
+      axis = std::stoi(str.substr(1));
+    }else if(std::regex_search(str, m, re)){
+      return parse_request(m[1]);
     }else{
-      axis = std::stoi(str);
+      std::cerr << "Invalid command: "<<str << std::endl;
     }
   }catch (const std::invalid_argument& ia) {
 	  std::cerr << "Invalid argument: " << ia.what()<<": "<<str << '\n';
   }
-
 }
 
 void Controller::update(){
+  std::lock_guard<std::mutex> lock(m);
   if (angle == 0){
     //We work in angle mode only when axis = 0.
     return;

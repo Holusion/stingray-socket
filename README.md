@@ -7,6 +7,11 @@
 
 No dependencies should be required. stingray's plugin header is copied in `include` dir.
 
+### Debug
+
+Compile with debug flags: 
+
+    CPPFLAGS="-DDEBUG -g" make
 
 ### Usage
 
