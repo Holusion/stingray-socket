@@ -16,6 +16,7 @@
 
 #include <mutex>
 #include <atomic>
+const char resp[] = "HTTP/1.1 204 No Content\r\n\r\n";
 
 class  Controller: public EventListener {
   public:
@@ -26,7 +27,8 @@ class  Controller: public EventListener {
     static bool handle(int);
     static bool configure(int f);
     static std::string get_request(int);
-    static void parse_request(std::string str);
+    static void parse_request(const char*);
+    static void parse_line(std::string);
     virtual int getAxis() const{return axis;};
     virtual int getQuit() const{return quit;};
   private:
@@ -39,7 +41,6 @@ class  Controller: public EventListener {
     static std::mutex m;
     static std::regex re;
     static const size_t buflen_ = 1024;
-    static char buf_[buflen_];
     static Controller *instance;
 };
 
@@ -172,39 +173,49 @@ bool Controller::handle(int client){
       return true;
     }
   }else{
-    parse_request(std::string(buf));
+    parse_request(buf);
+    rc = send(client, resp, strlen(resp), 0);
+    if(rc == -1){
+      DEBUG_LOG("Error sending response : "<<strerror(errno)<<std::endl);
+    }
   }
   return false;
 }
 
-void Controller::parse_request(std::string str){
+void Controller::parse_request(const char* buf){
+  try{
+
+    std::string str(buf);
+    parse_line(str.substr(0, str.find("\n")));
+  }catch (const std::invalid_argument& ia) {
+	  std::cerr << "Invalid argument: " << ia.what()<<": "<<buf << '\n';
+  }
+}
+
+void Controller::parse_line(std::string str){
   int na;
   std::smatch m;
-
-  try{
-    str = str.substr(0, str.find("\n"));
-    if (str == "QUIT"){
+  if (str == "QUIT"){
       quit = 1;
       return;
-    }
-    if (str[0] == 'd'){
-      axis = 0;
-      na = std::stoi(str.substr(1));
-      if (std::signbit(na) == std::signbit((int)angle)){
-        angle += na;
-      }else{
-        angle = na;
-      }
-    }else if(str[0] == 'm'){
-      axis = std::stoi(str.substr(1));
-    }else if(std::regex_search(str, m, re)){
-      return parse_request(m[1]);
-    }else{
-      std::cerr << "Invalid command: "<<str << std::endl;
-    }
-  }catch (const std::invalid_argument& ia) {
-	  std::cerr << "Invalid argument: " << ia.what()<<": "<<str << '\n';
   }
+  if (str[0] == 'd'){
+    axis = 0;
+    na = std::stoi(str.substr(1));
+    if (std::signbit(na) == std::signbit((int)angle)){
+      angle += na;
+    }else{
+      angle = na;
+    }
+  }else if(str[0] == 'm'){
+    angle = 0;
+    axis = std::stoi(str.substr(1));
+  }else if(std::regex_search(str, m, re)){
+    return parse_line(m[1]);
+  }else{
+    std::cerr << "Invalid command: "<<str << std::endl;
+  }
+
 }
 
 void Controller::update(){
@@ -218,8 +229,8 @@ void Controller::update(){
   }else{
     axis = 4*angle/abs(angle);
   }
-  (angle<0)?angle++:angle--;
-
+  if(angle < 0) angle++;
+  else if(0 < angle) angle--;
 }
 
 
